@@ -47,9 +47,10 @@
                 <label>Device:
                     <select id="deviceSelect">
                         <option value="original">Original</option>
-                        <option value="Samsung Galaxy S24 Ultra">Samsung S24 Ultra</option>
-                        <option value="iPhone 15 Pro">iPhone 15 Pro</option>
-                        <option value="Google Pixel 8 Pro">Pixel 8 Pro</option>
+                        <option value="Samsung|Galaxy S24 Ultra">Samsung S24 Ultra</option>
+                        <option value="Samsung|SM-G973U">Samsung SM-G973U</option>
+                        <option value="Apple|iPhone 15 Pro">iPhone 15 Pro</option>
+                        <option value="Google|Pixel 8 Pro">Pixel 8 Pro</option>
                     </select>
                 </label>
 
@@ -70,6 +71,7 @@
 
     <script>
         let files = [];
+        const deviceSelect = document.getElementById('deviceSelect');
 
         // Drag & drop handlers
         const dropZone = document.getElementById('dropZone');
@@ -119,8 +121,14 @@
 
                 display.textContent = metaInfo.join('\n');
 
-                // Update form controls
-                document.getElementById('deviceSelect').value = allMeta.Model || 'original';
+                // Update device selector
+                const currentDevice = `${allMeta.Make}|${allMeta.Model}`;
+                const optionExists = Array.from(deviceSelect.options).some(
+                    opt => opt.value === currentDevice
+                );
+                deviceSelect.value = optionExists ? currentDevice : 'original';
+
+                // Update GPS inputs
                 if(allMeta.GPSLatitude) {
                     document.getElementById('gpsLat').value = convertGPSToDecimal(allMeta.GPSLatitude);
                     document.getElementById('gpsLng').value = convertGPSToDecimal(allMeta.GPSLongitude);
@@ -140,34 +148,61 @@
             const zip = new JSZip();
             
             for(const file of files) {
-                const arrayBuffer = await file.arrayBuffer();
-                const exifObj = piexif.load(arrayBuffer);
-                
-                // Update device model
-                const newModel = document.getElementById('deviceSelect').value;
-                if(newModel !== 'original') {
-                    exifObj['0th'][piexif.ImageIFD.Model] = newModel;
-                }
+                try {
+                    const reader = new FileReader();
+                    
+                    // Read as binary string for Piexif
+                    const binaryString = await new Promise((resolve, reject) => {
+                        reader.onload = (e) => resolve(e.target.result);
+                        reader.onerror = reject;
+                        reader.readAsBinaryString(file);
+                    });
 
-                // Update GPS
-                const lat = document.getElementById('gpsLat').value;
-                const lng = document.getElementById('gpsLng').value;
-                if(lat && lng) {
-                    exifObj['GPS'][piexif.GPSIFD.GPSLatitude] = convertToDMS(lat);
-                    exifObj['GPS'][piexif.GPSIFD.GPSLongitude] = convertToDMS(lng);
-                    exifObj['GPS'][piexif.GPSIFD.GPSLatitudeRef] = lat >= 0 ? 'N' : 'S';
-                    exifObj['GPS'][piexif.GPSIFD.GPSLongitudeRef] = lng >= 0 ? 'E' : 'W';
-                }
+                    let exifObj = {'0th': {}, 'Exif': {}, 'GPS': {}, 'Interop': {}, '1st': {}};
+                    
+                    try {
+                        exifObj = piexif.load(binaryString);
+                    } catch(e) {
+                        console.log('No EXIF data found, creating new');
+                    }
 
-                const exifBytes = piexif.dump(exifObj);
-                const newImage = piexif.insert(exifBytes, arrayBuffer);
-                
-                const blob = new Blob([newImage], {type: 'image/jpeg'});
-                
-                if(document.getElementById('zipFiles').checked) {
-                    zip.file(`modified_${file.name}`, blob);
-                } else {
-                    saveAs(blob, `modified_${file.name}`);
+                    // Update device make/model
+                    const deviceValue = deviceSelect.value;
+                    if(deviceValue !== 'original') {
+                        const [make, model] = deviceValue.split('|');
+                        exifObj['0th'][piexif.ImageIFD.Make] = make;
+                        exifObj['0th'][piexif.ImageIFD.Model] = model;
+                    }
+
+                    // Update GPS
+                    const lat = parseFloat(document.getElementById('gpsLat').value);
+                    const lng = parseFloat(document.getElementById('gpsLng').value);
+                    if(!isNaN(lat) && !isNaN(lng)) {
+                        exifObj['GPS'][piexif.GPSIFD.GPSLatitude] = convertToDMS(Math.abs(lat));
+                        exifObj['GPS'][piexif.GPSIFD.GPSLongitude] = convertToDMS(Math.abs(lng));
+                        exifObj['GPS'][piexif.GPSIFD.GPSLatitudeRef] = lat >= 0 ? 'N' : 'S';
+                        exifObj['GPS'][piexif.GPSIFD.GPSLongitudeRef] = lng >= 0 ? 'E' : 'W';
+                    }
+
+                    const exifBytes = piexif.dump(exifObj);
+                    const newImage = piexif.insert(exifBytes, binaryString);
+                    
+                    // Convert to Uint8Array
+                    const uint8Array = new Uint8Array(newImage.length);
+                    for(let i = 0; i < newImage.length; i++) {
+                        uint8Array[i] = newImage.charCodeAt(i);
+                    }
+
+                    const blob = new Blob([uint8Array], {type: file.type});
+                    
+                    if(document.getElementById('zipFiles').checked) {
+                        zip.file(`modified_${file.name}`, blob);
+                    } else {
+                        saveAs(blob, `modified_${file.name}`);
+                    }
+                } catch(error) {
+                    console.error('Error processing file:', file.name, error);
+                    alert(`Error processing ${file.name}: ${error.message}`);
                 }
             }
 
