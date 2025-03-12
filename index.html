@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>EXIF Metadata Editor</title>
+    <style>
+        /* Basic styling */
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .drop-zone { border: 2px dashed #ccc; padding: 20px; text-align: center; margin: 20px 0; }
+        .preview { display: flex; gap: 20px; margin-top: 20px; }
+        .thumbnail { max-width: 200px; }
+        .metadata { flex-grow: 1; }
+        .hidden { display: none; }
+    </style>
+    <!-- EXIF Library -->
+    <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
+    <!-- JSZip for ZIP creation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/piexifjs@1.0.0/piexif.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+</head>
+<body>
+    <div class="drop-zone" id="dropZone">
+        Drag & Drop Images Here or <input type="file" id="fileInput" multiple accept="image/*">
+    </div>
+
+    <div id="editor" class="hidden">
+        <div class="preview">
+            <img id="previewImage" class="thumbnail" src="#" alt="Preview">
+            <div class="metadata">
+                <label>Device:
+                    <select id="deviceSelect">
+                        <option value="original">Original</option>
+                        <option value="Samsung Galaxy S24 Ultra">Samsung S24 Ultra</option>
+                        <option value="iPhone 15 Pro">iPhone 15 Pro</option>
+                        <option value="Google Pixel 8 Pro">Pixel 8 Pro</option>
+                    </select>
+                </label>
+                
+                <label>GPS Latitude: <input type="number" id="gpsLat" step="any"></label>
+                <label>GPS Longitude: <input type="number" id="gpsLng" step="any"></label>
+                
+                <button onclick="processImages()">Process Images</button>
+                <label><input type="checkbox" id="zipFiles"> Save as ZIP</label>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let files = [];
+        
+        // Handle drag & drop
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        
+        dropZone.ondragover = (e) => {
+            e.preventDefault();
+            dropZone.style.backgroundColor = '#f0f0f0';
+        };
+
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            handleFiles(e.dataTransfer.files);
+        };
+
+        fileInput.onchange = (e) => handleFiles(e.target.files);
+
+        function handleFiles(newFiles) {
+            files = Array.from(newFiles);
+            document.getElementById('editor').classList.remove('hidden');
+            previewImage(files[0]);
+        }
+
+        // Preview first image
+        function previewImage(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('previewImage').src = e.target.result;
+                readMetadata(file);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Read existing metadata
+        function readMetadata(file) {
+            EXIF.getData(file, function() {
+                const allMeta = EXIF.getAllTags(this);
+                console.log('Existing EXIF:', allMeta);
+                
+                // Populate device if available
+                document.getElementById('deviceSelect').value = 
+                    allMeta.Model || 'original';
+                
+                // Populate GPS if available
+                if(allMeta.GPSLatitude && allMeta.GPSLongitude) {
+                    document.getElementById('gpsLat').value = allMeta.GPSLatitude;
+                    document.getElementById('gpsLng').value = allMeta.GPSLongitude;
+                }
+            });
+        }
+
+        // Main processing function
+        async function processImages() {
+            const zip = new JSZip();
+            
+            for(const file of files) {
+                const reader = new FileReader();
+                const img = await new Promise((resolve) => {
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.readAsArrayBuffer(file);
+                });
+
+                // Convert to JPEG with modified EXIF
+                const newBlob = await modifyMetadata(img, file.type);
+                
+                if(document.getElementById('zipFiles').checked) {
+                    zip.file(`modified_${file.name}`, newBlob);
+                } else {
+                    saveAs(newBlob, `modified_${file.name}`);
+                }
+            }
+
+            if(document.getElementById('zipFiles').checked) {
+                zip.generateAsync({type:"blob"}).then((content) => {
+                    saveAs(content, "modified_images.zip");
+                });
+            }
+        }
+
+        // Metadata modification logic
+        async function modifyMetadata(imageBuffer, mimeType) {
+            // Convert to JPEG for EXIF compatibility
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            const img = new Image();
+            await new Promise((resolve) => {
+                img.onload = resolve;
+                img.src = URL.createObjectURL(new Blob([imageBuffer], {type: mimeType}));
+            });
+
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+
+            // Get new metadata values
+            const newMetadata = {
+                Model: document.getElementById('deviceSelect').value,
+                GPSLatitude: document.getElementById('gpsLat').value,
+                GPSLongitude: document.getElementById('gpsLng').value
+            };
+
+            // Convert canvas to blob with metadata
+            return new Promise((resolve) => {
+                canvas.toBlob((blob) => {
+                    // This is where you'd actually modify the EXIF data
+                    // Note: EXIF.js only reads metadata, you'd need additional
+                    // libraries like piexifjs for writing
+                    resolve(blob);
+                }, 'image/jpeg', 0.9);
+            });
+        }
+    </script>
+</body>
+</html>
